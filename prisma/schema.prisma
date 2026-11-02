@@ -1,0 +1,163 @@
+// Esquema AYR NETWORK XV C.A. — ver plan-backend.md (ANEXO A)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+}
+
+enum PlanGroup {
+  HOGAR
+  AVANZADO
+  EMPRESARIAL
+}
+
+enum LocationType {
+  OFFICE
+  FUTURE
+}
+
+enum LegalType {
+  TERMS
+  PRIVACY
+}
+
+enum LegalStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String?
+  role         Role         @default(ADMIN)
+  active       Boolean      @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sessions     AuthSession[]
+  revisions    LegalRevision[]
+  legalDocs    LegalDocument[] @relation("LegalDocumentUpdatedBy")
+}
+
+model AuthSession {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model ImageAsset {
+  id           String        @id @default(cuid())
+  key          String        @unique
+  originalName String
+  fileName     String
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  alt          String?
+  folder       String        @default("imgs")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  locations    MapLocation[]
+}
+
+model Plan {
+  id        String    @id @default(cuid())
+  slug      String    @unique
+  name      String
+  speed     Int
+  price     Decimal   @db.Decimal(10, 2)
+  segment   String
+  use       String
+  devices   String
+  group     PlanGroup
+  order     Int       @default(0)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model MapLocation {
+  id           String       @id @default(cuid())
+  slug         String       @unique
+  type         LocationType
+  municipality String
+  state        String       @default("Carabobo")
+  address      String?
+  reference    String?
+  phone        String?
+  lat          Decimal      @db.Decimal(10, 7)
+  lng          Decimal      @db.Decimal(10, 7)
+  imageId      String?
+  image        ImageAsset?  @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  order        Int          @default(0)
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model LegalDocument {
+  id             String         @id @default(cuid())
+  type           LegalType      @unique
+  slug           String         @unique
+  title          String
+  status         LegalStatus    @default(DRAFT)
+  version        Int            @default(1)
+  lastModifiedAt DateTime?
+  publishedAt    DateTime?
+  updatedById    String?
+  updatedBy      User?          @relation("LegalDocumentUpdatedBy", fields: [updatedById], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  sections       LegalSection[]
+  revisions      LegalRevision[]
+}
+
+model LegalSection {
+  id         String        @id @default(cuid())
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sectionId  String
+  title      String
+  order      Int
+  // Prisma no admite listas opcionales: array vacío = "sin contenido".
+  paragraphs String[]      @default([])
+  list       String[]      @default([])
+  note       String?
+
+  @@index([documentId])
+}
+
+model LegalRevision {
+  id          String        @id @default(cuid())
+  documentId  String
+  document    LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version     Int
+  changedAt   DateTime      @default(now())
+  changedById String?
+  changedBy   User?         @relation(fields: [changedById], references: [id])
+  summary     String?
+
+  @@index([documentId])
+  // Una revisión por versión: dos publicaciones concurrentes no pueden
+  // escribir la misma versión (la segunda falla con P2002 → 409).
+  @@unique([documentId, version])
+}
