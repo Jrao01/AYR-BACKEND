@@ -23,7 +23,7 @@ COPY --from=build /app/dist ./dist
 RUN mkdir -p /app/uploads && chown -R node:node /app
 USER node
 
-EXPOSE 4000
+EXPOSE 9000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 \
   CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
 
