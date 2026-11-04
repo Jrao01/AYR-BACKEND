@@ -23,9 +23,9 @@ COPY --from=build /app/dist ./dist
 RUN mkdir -p /app/uploads && chown -R node:node /app
 USER node
 
-EXPOSE 9000
+EXPOSE 2000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 \
-  CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
+  CMD wget -qO- http://127.0.0.1:2000/api/health || exit 1
 
 # migrate deploy al arrancar (idempotente) y luego la API
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]

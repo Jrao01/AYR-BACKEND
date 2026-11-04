@@ -27,7 +27,7 @@ services:
       UPLOAD_DIR: /app/uploads
       NODE_ENV: production
     ports:
-      - "${PORT:-4000}:4000"
+      - "${PORT:-2000}:2000"
     volumes:
       # Bind mount: el mismo directorio que usa el dev server en la host.
       - ./uploads:/app/uploads
@@ -35,7 +35,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 5

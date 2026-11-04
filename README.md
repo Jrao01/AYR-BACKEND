@@ -17,7 +17,7 @@ docker compose up -d db     # solo PostgreSQL
 npm install
 npm run db:migrate          # crea el esquema
 npm run seed                # importa web/src/data/* + imágenes a uploads/
-npm run dev                 # API en http://localhost:4000
+npm run dev                 # API en http://localhost:2000
 ```
 
 El seed **se ejecuta desde la host** porque importa directamente `web/src/data/{plans,offices,legal}.ts`; es idempotente (se puede repetir sin duplicar nada).
@@ -26,7 +26,7 @@ El seed **se ejecuta desde la host** porque importa directamente `web/src/data/{
 
 ```bash
 docker compose up --build -d
-curl -s localhost:4000/api/health   # {"status":"ok","db":"up",...}
+curl -s localhost:2000/api/health   # {"status":"ok","db":"up",...}
 ```
 
 El contenedor `api` ejecuta `prisma migrate deploy` al arrancar. Las imágenes viven en el volumen `uploads` y sobreviven a `docker compose down && up`.
