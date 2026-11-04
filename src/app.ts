@@ -16,6 +16,7 @@ import { imagesRouter } from './modules/images/images.routes.js';
 import { plansAdminRouter, plansPublicRouter } from './modules/plans/plans.routes.js';
 import { locationsAdminRouter, locationsPublicRouter } from './modules/locations/locations.routes.js';
 import { legalAdminRouter, legalPublicRouter } from './modules/legal/legal.routes.js';
+import { contactRouter, contactSubmissionsRouter } from './modules/contact/contact.routes.js';
 
 export type CreateAppOptions = {
   /** Intentos de login por ventana, para tests (por defecto, env AUTH_RATE_MAX). */
@@ -105,6 +106,8 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use('/api/plans', plansPublicRouter);
   app.use('/api/locations', locationsPublicRouter);
   app.use('/api/legal', legalPublicRouter);
+  // Solicitud de preinstalación (formulario público con adjuntos).
+  app.use('/api/contact', contactRouter);
 
   // Todo lo que cuelga de /api/admin exige token de acceso.
   app.use('/api/admin', requireAuth);
@@ -112,6 +115,8 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use('/api/admin/plans', plansAdminRouter);
   app.use('/api/admin/locations', locationsAdminRouter);
   app.use('/api/admin/legal', legalAdminRouter);
+  // Rutas admin de contactos/solicitudes
+  app.use('/api/admin/contact-submissions', contactSubmissionsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

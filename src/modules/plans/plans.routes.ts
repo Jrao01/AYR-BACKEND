@@ -158,6 +158,6 @@ plansAdminRouter.delete('/:id', async (req, res) => {
   if (!existing) {
     throw new AppError(404, 'NOT_FOUND', 'Plan no encontrado');
   }
-  await prisma.plan.update({ where: { id: existing.id }, data: { active: false } });
+  await prisma.plan.delete({ where: { id: existing.id } });
   res.status(204).end();
 });

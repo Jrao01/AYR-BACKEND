@@ -227,6 +227,6 @@ locationsAdminRouter.delete('/:id', async (req, res) => {
   if (!existing) {
     throw new AppError(404, 'NOT_FOUND', 'Ubicación no encontrada');
   }
-  await prisma.mapLocation.update({ where: { id: existing.id }, data: { active: false } });
+  await prisma.mapLocation.delete({ where: { id: existing.id } });
   res.status(204).end();
 });

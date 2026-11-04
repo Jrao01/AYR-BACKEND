@@ -27,6 +27,10 @@ const schema = z.object({
 
   ADMIN_EMAIL: z.email().optional(),
   ADMIN_PASSWORD: z.string().min(8).optional(),
+
+  // Wisphub: sandbox en desarrollo; en producción apunta a api.wisphub.net.
+  WISPHUB_API_URL: z.url().default('https://sandbox-api.wisphub.net/api/solicitar-instalacion/'),
+  WISPHUB_API_KEY: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
