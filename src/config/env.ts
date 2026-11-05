@@ -20,7 +20,7 @@ const schema = z.object({
   GLOBAL_RATE_MAX: z.coerce.number().int().min(1).default(300),
   GLOBAL_RATE_WINDOW_MS: z.coerce.number().int().min(1000).default(60 * 1000),
 
-  CORS_ORIGINS: z.string().default('https://ayrnetworxv.ve/'),
+  CORS_ORIGINS: z.string().default('https://ayrnetworxv.ve'),
 
   UPLOAD_DIR: z.string().default('./uploads'),
   MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
