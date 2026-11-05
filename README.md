@@ -16,11 +16,11 @@ cp .env.example .env        # y rellena DATABASE_URL, JWT_* y ADMIN_*
 docker compose up -d db     # solo PostgreSQL
 npm install
 npm run db:migrate          # crea el esquema
-npm run seed                # importa web/src/data/* + imágenes a uploads/
+npm run seed                # (opcional) sembrado manual; el arranque también lo hace solo
 npm run dev                 # API en http://localhost:2000
 ```
 
-El seed **se ejecuta desde la host** porque importa directamente `web/src/data/{plans,offices,legal}.ts`; es idempotente (se puede repetir sin duplicar nada).
+Al arrancar, el backend comprueba la BD: si no hay usuarios crea el admin de `ADMIN_EMAIL`/`ADMIN_PASSWORD`, y si falta cualquiera de las tablas base ejecuta el seed idempotente. Se puede desactivar con `AUTO_SEED=false`.
 
 ### Todo en Docker
 
@@ -40,8 +40,8 @@ El contenedor `api` ejecuta `prisma migrate deploy` al arrancar. Las imágenes v
 | `npm start` | Ejecuta `dist/server.js` (producción) |
 | `npm run typecheck` | `tsc --noEmit` (incluye prisma/scripts/tests) |
 | `npm run lint` | oxlint |
-| `npm test` | vitest (requiere `db` arriba + `npm run seed`) |
-| `npm run seed` | Sembrado idempotente + copia de imágenes a `uploads/` |
+| `npm test` | vitest (requiere `db` arriba + datos sembrados) |
+| `npm run seed` | Sembrado manual idempotente + copia de imágenes a `uploads/` |
 | `npm run images:sync` | Solo copia/registra `web/public/{imgs,docs}` |
 | `npm run email:otp` | Envía el correo OTP de 8 dígitos (ver [Correo OTP](#correo-otp-via-resend)) |
 | `npm run db:migrate` | Migración nueva en desarrollo |
@@ -118,7 +118,7 @@ En los DTO **públicos** de planes y ubicaciones, `id` es el `slug` (p. ej. `hog
 
 ## Variables de entorno
 
-Ver [`.env.example`](.env.example). Obligatorias: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (≥16 caracteres). El usuario admin solo se crea si `ADMIN_EMAIL` + `ADMIN_PASSWORD` están definidos y no existe aún. Opcional: `RESEND_API_KEY` (solo la usa el script de correo OTP).
+Ver [`.env.example`](.env.example). Obligatorias: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (≥16 caracteres). El usuario admin solo se crea si `ADMIN_EMAIL` + `ADMIN_PASSWORD` están definidos y no existe aún. `AUTO_SEED` (por defecto `true`) controla el sembrado automático al arrancar. Opcional: `RESEND_API_KEY` (solo la usa el script de correo OTP).
 
 ## Correo OTP vía Resend
 
@@ -227,9 +227,12 @@ Cloudflare) para poder usar `AyrNetworx <admin@ayrnetworxv.ve>` como remitente.
 
 ```
 prisma/schema.prisma    modelos (ver ANEXO A del plan)
-prisma/seed.ts          importa prisma/seed-content.ts → BD
-prisma/seed-content.ts  contenido de arranque (planes, oficinas, legales)
-scripts/sync-images.ts  copia web/public/{imgs,docs} → uploads/ + ImageAsset
+prisma/seed.ts          wrapper de src/seed/seed.ts para `npm run seed`
+src/seed/seed.ts        sembrado idempotente → BD
+src/seed/seed-content.ts contenido de arranque (planes, oficinas, legales)
+src/seed/sync-images.ts copia web/public/{imgs,docs} → uploads/ + ImageAsset
+src/bootstrap.ts        auto-seed al arrancar (admin + datos base)
+scripts/sync-images.ts  wrapper de src/seed/sync-images.ts
 utils/send-email.ts     CLI del correo OTP (config por código + flags)
 utils/email/            brand.ts (paleta/datos/logo) · otp.template.ts · email.service.ts
 src/config              env validado con zod
@@ -247,5 +250,5 @@ uploads/                imágenes (bind mount, gitignored)
 3. **Listas opcionales**: Prisma no las admite; `paragraphs[]`/`list[]` usan `[]` = "sin contenido".
 4. **Node 24** en el Dockerfile (vitest 5 / toolchain actual exigen ≥22.12).
 5. **`validateBody`** solo valida `query`/`params` dentro del handler (Express 5 expone `req.query` como getter).
-6. **Seed en la host**, no en el contenedor: importa archivos de `web/` que quedan fuera del build context.
+6. **Seed en arranque**: `src/bootstrap.ts` se ejecuta antes de `listen` (compilado en `dist`, sin `tsx`). En Docker siembra planes/ubicaciones/legales; las imágenes se omiten porque `web/public` queda fuera del build context.
 7. Contadores reales del seed: **7 planes, 4 ubicaciones, 2 documentos legales, 27 secciones, 16 imágenes, 1 admin**.

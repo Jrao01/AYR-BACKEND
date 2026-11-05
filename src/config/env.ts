@@ -28,6 +28,13 @@ const schema = z.object({
   ADMIN_EMAIL: z.email().optional(),
   ADMIN_PASSWORD: z.string().min(8).optional(),
 
+  // Sembrado automático al arrancar: crea el admin de .env si no hay usuarios
+  // y ejecuta el seed si falta cualquiera de las tablas base.
+  AUTO_SEED: z
+    .enum(['true', 'false', '1', '0'])
+    .default('true')
+    .transform((value) => value === 'true' || value === '1'),
+
   // Wisphub: sandbox en desarrollo; en producción apunta a api.wisphub.net.
   WISPHUB_API_URL: z.url().default('https://sandbox-api.wisphub.net/api/solicitar-instalacion/'),
   WISPHUB_API_KEY: z.string().optional(),
