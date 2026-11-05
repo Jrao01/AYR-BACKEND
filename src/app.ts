@@ -63,7 +63,28 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
-  app.use(cors({ origin: corsOrigins, credentials: true }));
+  logger.info({ corsOrigins }, 'Orígenes CORS permitidos');
+  if (env.NODE_ENV === 'production' && env.TRUST_PROXY === 0) {
+    logger.warn(
+      'TRUST_PROXY=0 detrás de un proxy: req.ip será la IP del proxy y los límites por IP se compartirán entre todos los usuarios',
+    );
+  }
+  app.use(
+    cors({
+      origin(origin, callback) {
+        // Sin Origin (curl, monitores, mismo origen) no hay nada que validar.
+        if (!origin || corsOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        // Se deja constancia del origen exacto: es la causa típica de los
+        // "blocked by CORS" cuando se entra por www u otro subdominio.
+        logger.warn({ origin, allowed: corsOrigins }, 'Origen CORS rechazado');
+        callback(null, false);
+      },
+      credentials: true,
+    }),
+  );
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 

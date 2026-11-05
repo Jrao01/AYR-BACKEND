@@ -2,6 +2,11 @@ import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { rateLimit } from 'express-rate-limit';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, openAsBlob } from 'node:fs';
+import { unlink } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
@@ -9,27 +14,69 @@ import { AppError } from '../../middleware/error.js';
 
 /**
  * POST /api/contact — solicitud de preinstalación del sitio público.
- * Guarda el lead en la base de datos y lo reenvía a Wisphub como
- * multipart/form-data (mismo contrato que el curl de la documentación).
- * 
+ * Guarda el lead en la base de datos y responde de inmediato (202). El
+ * reenvío a Wisphub se hace en segundo plano para que un fallo o una
+ * demora del tercero nunca se convierta en un 502 para el usuario.
+ *
  * Logging estructurado: entrada de datos, procesamiento, envío a Wisphub,
- * y respuesta final (éxo o fallback local).
+ * y resultado final (éxito o fallback local).
  */
 
 export const contactRouter = Router();
 
-// Los archivos viajan en memoria: se reenvían a Wisphub y no se guardan
-// copias locales de documentos de identidad.
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 
-// ── Multer: archivos en memoria, sin guardar copias locales ─────────────
+// ── Multer: disco temporal, sin copias locales permanentes ──────────────
+// Los archivos se escriben en /tmp y se borran en cuanto termina el envío a
+// Wisphub. Así no se cargan 3 fotos en RAM (ni sus copias para el Blob),
+// que era el mayor consumidor de memoria del proceso.
+const CONTACT_TMP_DIR = path.join(os.tmpdir(), 'ayr-contact');
+mkdirSync(CONTACT_TMP_DIR, { recursive: true, mode: 0o700 });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, CONTACT_TMP_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${randomUUID()}${ALLOWED_EXT.has(ext) ? ext : '.bin'}`);
+  },
+});
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   limits: {
     fileSize: env.MAX_UPLOAD_MB * 1024 * 1024,
     files: 3,
   },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (file.mimetype.startsWith('image/') || ALLOWED_MIME.has(file.mimetype) || ALLOWED_EXT.has(ext)) {
+      cb(null, true);
+      return;
+    }
+    cb(new AppError(400, 'ARCHIVO_INVALIDO', 'Solo se permiten imágenes (JPG, PNG, WEBP o HEIC).'));
+  },
 });
+
+/** Borra los temporales; nunca deja que un fallo de limpieza rompa la petición. */
+async function cleanupFiles(files: Express.Multer.File[] | undefined | null): Promise<void> {
+  if (!files?.length) return;
+  await Promise.all(files.map((file) => unlink(file.path).catch(() => undefined)));
+}
+
+/** Todos los archivos que Multer llegó a escribir, para limpiarlos ante errores. */
+function uploadedFiles(req: Express.Request): Express.Multer.File[] {
+  const byField = req.files as Record<string, Express.Multer.File[]> | undefined;
+  if (!byField) return [];
+  return Object.values(byField).flat();
+}
+
+/** Borra los temporales cuando la respuesta termina (rutas síncronas). */
+function cleanupAfterResponse(req: Express.Request, res: import('express').Response, next: import('express').NextFunction): void {
+  const files = uploadedFiles(req);
+  res.once('close', () => void cleanupFiles(files));
+  next();
+}
 
 // Configuración del rate limit con logging en eventos
 const contactLimiter = rateLimit({
@@ -113,11 +160,9 @@ async function sendToWisphub(fields: ContactFields, files: Express.Multer.File[]
   if (fields.coordenadas) form.set('coordenadas', fields.coordenadas);
 
   for (const file of files) {
-    form.set(
-      file.fieldname,
-      new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
-      file.originalname,
-    );
+    // Blob respaldado por el archivo en disco: no se copia a la RAM.
+    const blob = await openAsBlob(file.path, { type: file.mimetype });
+    form.set(file.fieldname, blob, file.originalname);
   }
 
   const res = await fetch(env.WISPHUB_API_URL, {
@@ -131,6 +176,63 @@ async function sendToWisphub(fields: ContactFields, files: Express.Multer.File[]
   return { ok: res.ok, status: res.status, body };
 }
 
+/**
+ * Envío a Wisphub en segundo plano. Se ejecuta después de responder al
+ * usuario: si Wisphub falla o tarda, el lead queda `pending` con el error
+ * guardado y el panel admin puede reintentar con `/:id/migrate`.
+ */
+async function syncToWisphub(
+  submissionId: string,
+  fields: ContactFields,
+  files: Express.Multer.File[],
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    let wisphub: { ok: boolean; status: number; body: string };
+    try {
+      logger.info({ submissionId, api_url: env.WISPHUB_API_URL }, 'Enviando solicitud a Wisphub (segundo plano)');
+      wisphub = await sendToWisphub(fields, files);
+    } catch (err) {
+      const message = 'Wisphub no respondió; la solicitud quedó pendiente.';
+      logger.error({ err, submissionId, ms: Date.now() - startedAt }, 'Wisphub inalcanzable (segundo plano)');
+      await prisma.contactSubmission
+        .update({ where: { id: submissionId }, data: { wisphubError: message } })
+        .catch((updateErr) => logger.error({ err: updateErr, submissionId }, 'No se pudo guardar wisphubError'));
+      return;
+    }
+
+    logger.info(
+      {
+        submissionId,
+        wisphub_ok: wisphub.ok,
+        wisphub_status: wisphub.status,
+        wisphub_body_preview: wisphub.body ? wisphub.body.slice(0, 200) : null,
+        ms: Date.now() - startedAt,
+      },
+      'Respuesta recibida de Wisphub',
+    );
+
+    if (!wisphub.ok) {
+      const detail = `Wisphub respondió ${wisphub.status}: ${wisphub.body.slice(0, 300)}`;
+      logger.warn({ submissionId, status: wisphub.status }, 'Wisphub rechazó la solicitud');
+      await prisma.contactSubmission
+        .update({ where: { id: submissionId }, data: { wisphubError: detail } })
+        .catch((updateErr) => logger.error({ err: updateErr, submissionId }, 'No se pudo guardar wisphubError'));
+      return;
+    }
+
+    await prisma.contactSubmission.update({
+      where: { id: submissionId },
+      data: { status: 'sent_to_wisphub', wisphubSentAt: new Date(), wisphubError: null },
+    });
+    logger.info({ submissionId, final_status: 'sent_to_wisphub' }, 'Lead marcado como enviado a Wisphub');
+  } catch (err) {
+    logger.error({ err, submissionId }, 'Error inesperado sincronizando con Wisphub');
+  } finally {
+    await cleanupFiles(files);
+  }
+}
+
 contactRouter.post(
   '/',
   contactLimiter,
@@ -140,8 +242,13 @@ contactRouter.post(
     { name: 'proof_of_address', maxCount: 1 },
   ]),
   async (req, res, next) => {
+    const startedAt = Date.now();
     // Log de inicio de petición
     logRequestStart(req);
+
+    // Todos los temporales que Multer escribió, para limpiarlos si algo falla
+    // antes de delegarlos al envío en segundo plano.
+    const uploaded = uploadedFiles(req);
 
     try {
       const parsed = contactSchema.safeParse(req.body);
@@ -196,74 +303,36 @@ contactRouter.post(
         },
       });
       logger.info(
-        { submissionId: submission.id, status: 'pending' },
+        {
+          submissionId: submission.id,
+          status: 'pending',
+          ms: Date.now() - startedAt,
+          rss_mb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        },
         'Lead guardado en base de datos pending Wisphub'
       );
 
-      let wisphub: { ok: boolean; status: number; body: string };
-      try {
-        logger.info(
-          { submissionId: submission.id, api_url: env.WISPHUB_API_URL },
-          'Enviando solicitud a Wisphub'
-        );
-        wisphub = await sendToWisphub(fields, files);
-      } catch (err) {
-        logger.error({ err, submissionId: submission.id }, 'Wisphub inalcanzable (excepción)');
-        throw new AppError(
-          502,
-          'WISPHUB_INALCANZABLE',
-          'El sistema de instalaciones no respondió. Tu solicitud quedó guardada y te contactaremos igualmente.',
-        );
-      }
-
-      // Log: respuesta completa de Wisphub
-      logger.info(
-        {
-          submissionId: submission.id,
-          wisphub_ok: wisphub.ok,
-          wisphub_status: wisphub.status,
-          wisphub_body_preview: wisphub.body ? wisphub.body.slice(0, 200) : null,
-        },
-        'Respuesta recibida de Wisphub'
-      );
-
-      if (!wisphub.ok) {
-        logger.warn(
-          {
-            status: wisphub.status,
-            body_preview: wisphub.body ? wisphub.body.slice(0, 500) : null,
-            submissionId: submission.id,
-          },
-          'Wisphub rechazó la solicitud'
-        );
-        throw new AppError(
-          502,
-          'WISPHUB_RECHAZO',
-          'El sistema de instalaciones no aceptó la solicitud. Quedó guardada y te contactaremos para completarla.',
-        );
-      }
-
-      // Actualizar status a enviado correctamente
-      await prisma.contactSubmission.update({
-        where: { id: submission.id },
-        data: { status: 'sent_to_wisphub' },
-      });
-      logger.info(
-        { submissionId: submission.id, final_status: 'sent_to_wisphub' },
-        'Lead marcado como enviado a Wisphub exitosamente'
-      );
-
-      res.status(201).json({
+      // Responder de inmediato: el proxy/Cloudflare nunca espera a Wisphub.
+      // El envío al tercero ya no puede provocar un 502 de cara al usuario.
+      res.status(202).json({
         data: {
           id: submission.id,
-          message: 'Solicitud recibida y enviada al sistema de instalaciones.',
+          message: 'Solicitud recibida. El sistema de instalaciones la procesará en breve.',
         },
       });
       logger.info(
-        { submissionId: submission.id, response_status: 201 },
-        'Respuesta exitosa enviada al cliente'
+        { submissionId: submission.id, response_status: 202, ms: Date.now() - startedAt },
+        'Respuesta enviada al cliente'
       );
+
+      // Fire-and-forget: guarda el resultado en la BD y limpia los temporales.
+      void syncToWisphub(submission.id, fields, files);
     } catch (err) {
+      if (res.headersSent) {
+        logger.error({ err }, 'Error después de responder al cliente');
+        return;
+      }
+      await cleanupFiles(uploaded).catch(() => undefined);
       next(err);
     }
   },
@@ -341,6 +410,7 @@ contactSubmissionsRouter.post(
     { name: 'back_dni_proof', maxCount: 1 },
     { name: 'proof_of_address', maxCount: 1 },
   ]),
+  cleanupAfterResponse,
   async (req, res) => {
     const id = String(req.params.id);
     const submission = await prisma.contactSubmission.findUnique({ where: { id } });

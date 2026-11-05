@@ -39,6 +39,14 @@ async function shutdown(signal: string) {
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
+process.on('uncaughtException', (err) => {
+  // Ante un estado indefinido es mejor reiniciar que seguir atendiendo
+  // peticiones: el orquestador levantará un contenedor limpio y el log
+  // conservará la traza real del fallo.
+  logger.fatal({ err }, 'Excepción no capturada; cerrando proceso');
+  process.exit(1);
+});
+
 process.on('unhandledRejection', (reason) => {
   logger.error({ err: reason }, 'Promesa rechazada sin manejar');
 });

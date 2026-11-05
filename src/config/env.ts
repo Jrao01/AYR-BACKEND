@@ -20,7 +20,7 @@ const schema = z.object({
   GLOBAL_RATE_MAX: z.coerce.number().int().min(1).default(300),
   GLOBAL_RATE_WINDOW_MS: z.coerce.number().int().min(1000).default(60 * 1000),
 
-  CORS_ORIGINS: z.string().default('https://ayrnetworxv.ve'),
+  CORS_ORIGINS: z.string().optional(),
 
   UPLOAD_DIR: z.string().default('./uploads'),
   MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
@@ -52,6 +52,45 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
-export const corsOrigins: (string | RegExp)[] = env.CORS_ORIGINS.split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+/**
+ * Normaliza los orígenes de CORS que vienen del `.env`:
+ *  - recorta espacios y quita barras finales;
+ *  - añade `https://` cuando falta el esquema;
+ *  - descarta entradas inválidas.
+ *
+ * `cors` compara el header `Origin` de forma literal, así que
+ * `https://ayrnetworxv.ve/`, `ayrnetworxv.ve` y `https://ayrnetworxv.ve`
+ * deben terminar todos como `https://ayrnetworxv.ve`.
+ *
+ * En producción la variable es obligatoria: si no queda ningún origen válido
+ * el proceso no arranca, en lugar de aceptar o rechazar orígenes sin avisar.
+ */
+function parseCorsOrigins(raw: string | undefined): string[] {
+  const normalized = new Set<string>();
+
+  for (const entry of (raw ?? '').split(',')) {
+    let value = entry.trim().replace(/\/+$/, '');
+    if (!value) continue;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) value = `https://${value}`;
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      // El header Origin nunca incluye path ni barra final.
+      normalized.add(`${url.protocol}//${url.host}`);
+    } catch {
+      // Entrada inválida: se ignora y se avisa abajo.
+    }
+  }
+
+  if (normalized.size === 0) {
+    if (env.NODE_ENV === 'production') {
+      console.error('CORS_ORIGINS no contiene ningún origen válido (obligatoria en producción)');
+      process.exit(1);
+    }
+    normalized.add('http://localhost:5173');
+  }
+
+  return [...normalized];
+}
+
+export const corsOrigins: string[] = parseCorsOrigins(env.CORS_ORIGINS);
