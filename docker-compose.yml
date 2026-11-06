@@ -30,10 +30,12 @@ services:
     ports:
       - "${PORT:-2000}:2000"
     volumes:
-      # Bind mount: el mismo directorio que usa el dev server en la host.
-      - ./uploads:/app/uploads
-      # Documentos privados de solicitudes: no se sirven públicamente.
-      - ./contact-uploads:/app/contact-uploads
+      # Volúmenes nombrados: persisten fuera del ciclo de vida del contenedor.
+      # No se pierden con `docker compose down` ni al hacer redeploy en Dokploy.
+      # Se recomienda crear estos volúmenes una vez en el host con:
+      #   docker volume create uploads_data contact_uploads_data
+      - uploads_data:/app/uploads
+      - contact_uploads_data:/app/contact-uploads
     depends_on:
       db:
         condition: service_healthy
@@ -46,3 +48,5 @@ services:
 
 volumes:
   pgdata:
+  uploads_data:
+  contact_uploads_data:

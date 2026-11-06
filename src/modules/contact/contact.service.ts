@@ -1,4 +1,4 @@
-import { openAsBlob } from 'node:fs';
+import { existsSync, openAsBlob } from 'node:fs';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
@@ -203,21 +203,35 @@ async function sendToWisphub(
   if (fields.postal_code) form.set('postal_code', fields.postal_code);
   if (fields.coordenadas) form.set('coordenadas', fields.coordenadas);
 
+  // Validación defensiva: asegurarse de que los archivos existen en el disco
+  // antes de intentar crearlos como Blob. En entornos containerizados (Dokploy/Docker)
+  // la ruta `file.path` debe ser absoluta y el archivo debe estar montado.
   for (const file of files) {
+    if (!existsSync(file.path)) {
+      logger.error({ filePath: file.path }, 'El archivo adjunto no existe en el disco del servidor');
+      throw new AppError(400, 'FILE_NOT_FOUND', `El archivo adjunto no se encuentra en el servidor: ${file.originalname}`);
+    }
     // Blob respaldado por el archivo en disco: no se copia a la RAM.
     const blob = await openAsBlob(file.path, { type: file.mimetype });
     form.set(file.fieldname, blob, file.originalname);
   }
 
-  const res = await fetch(env.WISPHUB_API_URL, {
-    method: 'POST',
-    headers: { Authorization: `Api-Key ${env.WISPHUB_API_KEY}` },
-    body: form,
-    signal: AbortSignal.timeout(15_000),
-  });
+  try {
+    const res = await fetch(env.WISPHUB_API_URL, {
+      method: 'POST',
+      headers: { Authorization: `Api-Key ${env.WISPHUB_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(15_000),
+    });
 
-  const body = await res.text();
-  return { ok: res.ok, status: res.status, body };
+    const body = await res.text();
+    return { ok: res.ok, status: res.status, body };
+  } catch (err: any) {
+    // Errores de red, timeouts o fallos de fetch: no lanzamos 502 genérico,
+    // sino un AppError con código claro para el panel/logs.
+    logger.error({ err }, 'Error de red o timeout al conectar con la API de Wisphub');
+    throw new AppError(502, 'WISPHUB_UNREACHABLE', 'No se pudo comunicar con el servidor de Wisphub (Timeout o error de red).');
+  }
 }
 
 /** Un envío que quedó colgado más de este tiempo puede reintentarse. */
