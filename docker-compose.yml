@@ -25,12 +25,15 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ayr}:${POSTGRES_PASSWORD:-ayr}@db:5432/${POSTGRES_DB:-ayr}?schema=public
       UPLOAD_DIR: /app/uploads
+      CONTACT_UPLOAD_DIR: /app/contact-uploads
       NODE_ENV: production
     ports:
       - "${PORT:-2000}:2000"
     volumes:
       # Bind mount: el mismo directorio que usa el dev server en la host.
       - ./uploads:/app/uploads
+      # Documentos privados de solicitudes: no se sirven públicamente.
+      - ./contact-uploads:/app/contact-uploads
     depends_on:
       db:
         condition: service_healthy

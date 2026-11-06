@@ -172,10 +172,14 @@ model ContactSubmission {
   address        String?    // dirección exacta indicada en el formulario
   location       String?    // barrio o localidad indicada en el formulario
   postalCode     String?    // código postal indicado en el formulario
-  photoDomicilio String?    // URL or path to the uploaded proof of domicile photo
+  // Nombres de archivo dentro de CONTACT_UPLOAD_DIR (nunca rutas públicas).
+  frontDniProof  String?    // foto 1 de la cédula
+  backDniProof   String?    // foto 2 de la cédula
+  proofOfAddress String?    // comprobante de domicilio (RIF)
   coordinates    String?    // lat,lng format
   status         String     @default("pending") // pending, sent_to_wisphub, completed
   wisphubSentAt  DateTime?  // última migración correcta a Wisphub
+  wisphubSendingAt DateTime? // lock temporal: evita envíos duplicados
   wisphubError   String?    // último error devuelto al migrar
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt

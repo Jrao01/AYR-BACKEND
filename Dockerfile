@@ -20,7 +20,7 @@ COPY prisma7.config.ts ./
 COPY prisma ./prisma
 COPY --from=build /app/dist ./dist
 
-RUN mkdir -p /app/uploads && chown -R node:node /app
+RUN mkdir -p /app/uploads /app/contact-uploads && chown -R node:node /app
 USER node
 
 EXPOSE 2000

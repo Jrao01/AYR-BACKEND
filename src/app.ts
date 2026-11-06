@@ -12,7 +12,7 @@ import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { requestId } from './middleware/requestId.js';
 import { requireAuth } from './middleware/auth.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
-import { imagesRouter } from './modules/images/images.routes.js';
+import { imagesPublicRouter, imagesRouter } from './modules/images/images.routes.js';
 import { plansAdminRouter, plansPublicRouter } from './modules/plans/plans.routes.js';
 import { locationsAdminRouter, locationsPublicRouter } from './modules/locations/locations.routes.js';
 import { legalAdminRouter, legalPublicRouter } from './modules/legal/legal.routes.js';
@@ -127,6 +127,8 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use('/api/plans', plansPublicRouter);
   app.use('/api/locations', locationsPublicRouter);
   app.use('/api/legal', legalPublicRouter);
+  // Imágenes fijas de las secciones del sitio (con respaldo local en el front).
+  app.use('/api/images', imagesPublicRouter);
   // Solicitud de preinstalación (formulario público con adjuntos).
   app.use('/api/contact', contactRouter);
 

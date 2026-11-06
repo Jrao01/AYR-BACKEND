@@ -23,6 +23,9 @@ const schema = z.object({
   CORS_ORIGINS: z.string().optional(),
 
   UPLOAD_DIR: z.string().default('./uploads'),
+  // Documentos privados de las solicitudes (cédula y comprobante). Nunca se
+  // sirven desde /uploads: solo por el endpoint autenticado del panel.
+  CONTACT_UPLOAD_DIR: z.string().default('./contact-uploads'),
   MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
 
   ADMIN_EMAIL: z.email().optional(),
