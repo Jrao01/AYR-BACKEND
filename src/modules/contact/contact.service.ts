@@ -1,4 +1,4 @@
-import { existsSync, openAsBlob } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
@@ -181,6 +181,44 @@ export function buildContactFields(
   };
 }
 
+/**
+ * Wisphub procesa y valida las fotos antes de aceptar la solicitud; con
+ * adjuntos reales de móvil (varios MB) la respuesta puede tardar bastante.
+ */
+const WISPHUB_TIMEOUT_MS = 60_000;
+
+/** Convierte el cuerpo de error de Wisphub en un mensaje entendible. */
+function describeWisphubError(status: number, body: string): string {
+  const trimmed = body.trim();
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') {
+        const messages: string[] = [];
+        for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
+          const texts = Array.isArray(value) ? value : [value];
+          for (const text of texts) {
+            if (typeof text === 'string' && text.trim()) {
+              messages.push(field === 'non_field_errors' ? text.trim() : `${field}: ${text.trim()}`);
+            }
+          }
+        }
+        if (messages.length > 0) {
+          return `Wisphub rechazó la solicitud: ${messages.join(' · ')}`;
+        }
+      }
+    } catch {
+      // Cuerpo no parseable: se usa el mensaje genérico de abajo.
+    }
+  }
+
+  if (status >= 500 || trimmed.startsWith('<')) {
+    return `Wisphub devolvió un error interno (HTTP ${status}). Intenta de nuevo en unos minutos.`;
+  }
+  return `Wisphub rechazó la solicitud (HTTP ${status}). Revisa los datos o los adjuntos.`;
+}
+
 /** Reenvía la solicitud a Wisphub con el mismo contrato del curl oficial. */
 async function sendToWisphub(
   fields: ContactFields,
@@ -203,34 +241,65 @@ async function sendToWisphub(
   if (fields.postal_code) form.set('postal_code', fields.postal_code);
   if (fields.coordenadas) form.set('coordenadas', fields.coordenadas);
 
-  // Validación defensiva: asegurarse de que los archivos existen en el disco
-  // antes de intentar crearlos como Blob. En entornos containerizados (Dokploy/Docker)
-  // la ruta `file.path` debe ser absoluta y el archivo debe estar montado.
+  // Adjunta los archivos. Los mismos fueron validados previamente por
+  // `assertAttachments` y `outgoingFiles` (en `sendSubmissionToWisphub`), pero
+  // añadimos una verificación final aquí como última capa de defensa para que
+  // cualquier inconsistencia de ruta o permiso sea devuelta como AppError (con
+  // header CORS) en lugar de causar un 502 silencioso de Nginx.
   for (const file of files) {
-    if (!existsSync(file.path)) {
-      logger.error({ filePath: file.path }, 'El archivo adjunto no existe en el disco del servidor');
-      throw new AppError(400, 'FILE_NOT_FOUND', `El archivo adjunto no se encuentra en el servidor: ${file.originalname}`);
+    // Ya valida que el archivo existe y es legible; si no, lanza AppError.
+    if (!storedFileExists(file.originalname)) {
+      throw new AppError(400, 'FILE_NOT_FOUND', `El archivo adjunto no se encuentra: ${file.originalname}`);
     }
-    // Blob respaldado por el archivo en disco: no se copia a la RAM.
-    const blob = await openAsBlob(file.path, { type: file.mimetype });
-    form.set(file.fieldname, blob, file.originalname);
+
+    // Se lee a memoria y se convierte a Blob. Evita `openAsBlob` (experimental
+    // en Node) que provocaba fallos al construir el multipart.
+    try {
+      const buffer = await readFile(file.path);
+      const blob = new Blob([new Uint8Array(buffer)], { type: file.mimetype });
+      form.set(file.fieldname, blob, file.originalname);
+    } catch (err) {
+      logger.error({ err, file: file.path }, 'Error al leer archivo adjunto');
+      throw new AppError(500, 'FILE_READ_ERROR', `No se pudo leer el archivo adjunto: ${file.originalname}`);
+    }
   }
+
+  const startedAt = Date.now();
 
   try {
     const res = await fetch(env.WISPHUB_API_URL, {
       method: 'POST',
-      headers: { Authorization: `Api-Key ${env.WISPHUB_API_KEY}` },
+      headers: {
+        Authorization: `Api-Key ${env.WISPHUB_API_KEY}`,
+        Accept: 'application/json',
+      },
       body: form,
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(WISPHUB_TIMEOUT_MS),
     });
 
     const body = await res.text();
+    logger.info(
+      { ok: res.ok, status: res.status, ms: Date.now() - startedAt },
+      'Respuesta de Wisphub',
+    );
+    if (!res.ok) {
+      logger.warn(
+        { status: res.status, bodyPreview: body.slice(0, 500) },
+        'Wisphub devolvió un error',
+      );
+    }
+
     return { ok: res.ok, status: res.status, body };
-  } catch (err: any) {
-    // Errores de red, timeouts o fallos de fetch: no lanzamos 502 genérico,
-    // sino un AppError con código claro para el panel/logs.
+  } catch (err) {
+    // Errores de red, timeouts o fallos de fetch: convertimos en AppError
+    // para mantener headers CORS consistentes y que el panel muestre un
+    // mensaje en lugar de que Nginx devuelva un 502 sin headers.
     logger.error({ err }, 'Error de red o timeout al conectar con la API de Wisphub');
-    throw new AppError(502, 'WISPHUB_UNREACHABLE', 'No se pudo comunicar con el servidor de Wisphub (Timeout o error de red).');
+    throw new AppError(
+      502,
+      'WISPHUB_UNREACHABLE',
+      'No se pudo comunicar con el servidor de Wisphub (timeout o error de red).',
+    );
   }
 }
 
@@ -311,6 +380,7 @@ export async function sendSubmissionToWisphub(
       wisphub = await sendToWisphub(fields, files);
     } catch (err) {
       logger.error({ err, submissionId: id, ms: Date.now() - startedAt }, 'Wisphub inalcanzable');
+      if (err instanceof AppError) throw err;
       throw new AppError(
         502,
         'WISPHUB_INALCANZABLE',
@@ -323,7 +393,6 @@ export async function sendSubmissionToWisphub(
         submissionId: id,
         wisphub_ok: wisphub.ok,
         wisphub_status: wisphub.status,
-        wisphub_body_preview: wisphub.body ? wisphub.body.slice(0, 200) : null,
         ms: Date.now() - startedAt,
       },
       'Respuesta recibida de Wisphub',
@@ -331,13 +400,13 @@ export async function sendSubmissionToWisphub(
 
     if (!wisphub.ok) {
       logger.warn({ submissionId: id, status: wisphub.status }, 'Wisphub rechazó la solicitud');
-      throw new AppError(
-        502,
-        'WISPHUB_RECHAZO',
+      const message =
         wisphub.status === 0
           ? 'Wisphub no está configurado (falta WISPHUB_API_KEY).'
-          : `Wisphub rechazó la solicitud (HTTP ${wisphub.status}). Revisa los datos o los adjuntos.`,
-      );
+          : describeWisphubError(wisphub.status, wisphub.body);
+      // Un rechazo por datos (4xx) no es una caída del servicio.
+      const status = wisphub.status >= 400 && wisphub.status < 500 ? 422 : 502;
+      throw new AppError(status, 'WISPHUB_RECHAZO', message, { wisphubStatus: wisphub.status });
     }
 
     const updated = await prisma.contactSubmission.update({
@@ -361,13 +430,16 @@ export async function sendSubmissionToWisphub(
     );
     return toSubmissionDto(updated);
   } catch (err) {
-    // Los errores de datos (4xx) no son fallos de Wisphub: no ensucian el estado.
+    // Guardamos el motivo cuando el fallo proviene de Wisphub (o es inesperado),
+    // pero no cuando es un error de datos del propio formulario.
+    const wisphubFailure =
+      err instanceof AppError && (err.status >= 500 || err.code.startsWith('WISPHUB_'));
     const message =
-      err instanceof AppError && err.status < 500
-        ? null
-        : err instanceof Error
+      wisphubFailure || !(err instanceof AppError)
+        ? err instanceof Error
           ? err.message
-          : 'Error inesperado al enviar a Wisphub';
+          : 'Error inesperado al enviar a Wisphub'
+        : null;
     await releaseClaim(id, message);
     throw err;
   }

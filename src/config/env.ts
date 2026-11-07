@@ -38,8 +38,9 @@ const schema = z.object({
     .default('true')
     .transform((value) => value === 'true' || value === '1'),
 
-  // Wisphub: sandbox en desarrollo; en producción apunta a api.wisphub.net.
-  WISPHUB_API_URL: z.url().default('https://sandbox-api.wisphub.net/api/solicitar-instalacion/'),
+  // Wisphub: por defecto apunta a producción. El sandbox
+  // (https://sandbox-api.wisphub.net/...) devuelve 502 a solicitudes válidas.
+  WISPHUB_API_URL: z.url().default('https://api.wisphub.co/api/solicitar-instalacion/'),
   WISPHUB_API_KEY: z.string().optional(),
 });
 

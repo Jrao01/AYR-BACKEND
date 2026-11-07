@@ -24,6 +24,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ayr}:${POSTGRES_PASSWORD:-ayr}@db:5432/${POSTGRES_DB:-ayr}?schema=public
+      # Puerto interno fijo: el mapeo y el healthcheck siempre usan 2000,
+      # aunque el .env defina otro PORT para el host.
+      PORT: 2000
       UPLOAD_DIR: /app/uploads
       CONTACT_UPLOAD_DIR: /app/contact-uploads
       NODE_ENV: production
