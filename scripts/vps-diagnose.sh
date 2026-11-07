@@ -8,15 +8,22 @@
 # Uso (desde cualquier carpeta):
 #   bash scripts/vps-diagnose.sh
 #
-set -uo pipefail
+set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
 echo "############ 0) Entorno ############"
 echo "directorio       = $ROOT"
-if [ ! -f ./.env ]; then
-  echo "ERROR: no existe $ROOT/.env"; exit 1
+
+# Este script necesita el .env del backend y el CLI de docker. Dentro del
+# contenedor (/app) no existe ninguno de los dos.
+if [ ! -f ./.env ] || ! command -v docker >/dev/null 2>&1; then
+  echo
+  echo "ERROR: ejecuta este script en el HOST del VPS, no dentro del contenedor."
+  echo "  Sal con 'exit' y corre: bash scripts/vps-diagnose.sh"
+  echo "  (desde la carpeta del repo que contiene docker-compose.yml)"
+  exit 1
 fi
 set -a; . ./.env; set +a
 WISPHUB_API_URL="${WISPHUB_API_URL:-}"
@@ -25,7 +32,7 @@ WISPHUB_API_KEY="${WISPHUB_API_KEY:-}"
 echo "WISPHUB_API_URL  = ${WISPHUB_API_URL:-<vacío>}"
 echo "KEY len          = ${#WISPHUB_API_KEY}"
 echo "KEY huella       = $(printf '%s' "${WISPHUB_API_KEY:-}" | sha256sum | cut -c1-12)"
-echo "KEY primeros 4   = ${WISPHUB_API_KEY:0:4}"
+echo "KEY primeros 4   = $(printf '%s' "$WISPHUB_API_KEY" | cut -c1-4)"
 # Compara la huella con la de la key que funcionó localmente (...j2S).
 
 if [ -z "${WISPHUB_API_URL:-}" ] || [ -z "${WISPHUB_API_KEY:-}" ]; then
