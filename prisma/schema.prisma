@@ -77,6 +77,9 @@ model ImageAsset {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   locations    MapLocation[]
+
+  // El seed busca por carpeta + nombre original (p. ej. miranda.jpg).
+  @@index([folder, originalName])
 }
 
 model Plan {
@@ -108,10 +111,15 @@ model MapLocation {
   lng          Decimal      @db.Decimal(10, 7)
   imageId      String?
   image        ImageAsset?  @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  // true = el panel quitó la foto a propósito; el seed no debe volver a asignarla.
+  imageOptOut  Boolean      @default(false)
   order        Int          @default(0)
   active       Boolean      @default(true)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+
+  // Se consulta para saber si una imagen está en uso antes de borrarla.
+  @@index([imageId])
 }
 
 model LegalDocument {

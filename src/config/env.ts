@@ -23,6 +23,10 @@ const schema = z.object({
   CORS_ORIGINS: z.string().optional(),
 
   UPLOAD_DIR: z.string().default('./uploads'),
+  // Directorio con las imágenes base a sembrar ({imgs,docs}). Si no se define,
+  // se busca automáticamente en ../web/public (monorepo) o seed-assets
+  // (imagen Docker). Nunca sustituye a las imágenes subidas por el panel.
+  PUBLIC_ASSETS_DIR: z.string().optional(),
   // Documentos privados de las solicitudes (cédula y comprobante). Nunca se
   // sirven desde /uploads: solo por el endpoint autenticado del panel.
   CONTACT_UPLOAD_DIR: z.string().default('./contact-uploads'),

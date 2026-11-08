@@ -184,3 +184,63 @@ describe('ciclo completo de una imagen', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('foto de una sede', () => {
+  it('sube, reemplaza y quita la foto; el público la refleja', async () => {
+    const t = await auth();
+    const slug = uniqueKey('sede');
+
+    const create = await request(app)
+      .post('/api/admin/locations')
+      .set(bearer(t))
+      .send({
+        slug,
+        type: 'future',
+        municipality: 'Sede de prueba',
+        state: 'Carabobo',
+        lat: 10.1,
+        lng: -68.1,
+        order: 999,
+      });
+    expect(create.status).toBe(201);
+
+    const png = fs.readFileSync(REAL_PNG);
+
+    // Subida: crea la clave `sede-<slug>` y vincula la ubicación.
+    const upload = await request(app)
+      .put(`/api/admin/images/locations/${slug}`)
+      .set(bearer(t))
+      .attach('file', png, { filename: 'foto.png', contentType: 'image/png' });
+    expect(upload.status).toBe(201);
+    expect(upload.body.data.key).toBe(`sede-${slug}`);
+    expect(upload.body.data.url).toMatch(/^\/uploads\/imgs\/.+\.png$/);
+
+    const publicAfterUpload = await request(app).get('/api/locations?type=future');
+    const linked = publicAfterUpload.body.data.find((loc: { slug: string }) => loc.slug === slug);
+    expect(linked.image).toBe(upload.body.data.url);
+
+    // Reemplazo: la misma clave, un archivo nuevo.
+    const replace = await request(app)
+      .put(`/api/admin/images/locations/${slug}`)
+      .set(bearer(t))
+      .attach('file', png, { filename: 'foto-2.png', contentType: 'image/png' });
+    expect(replace.status).toBe(201);
+    expect(replace.body.data.key).toBe(`sede-${slug}`);
+    expect(replace.body.data.url).not.toBe(upload.body.data.url);
+
+    // Quitar: la ubicación queda sin foto y el archivo se elimina.
+    const remove = await request(app)
+      .delete(`/api/admin/images/locations/${slug}/image`)
+      .set(bearer(t));
+    expect(remove.status).toBe(204);
+
+    const publicAfterRemove = await request(app).get('/api/locations?type=future');
+    const unlinked = publicAfterRemove.body.data.find((loc: { slug: string }) => loc.slug === slug);
+    expect(unlinked.image).toBeNull();
+
+    const oldFile = await request(app).get(replace.body.data.url);
+    expect(oldFile.status).toBe(404);
+
+    await request(app).delete(`/api/admin/locations/${slug}`).set(bearer(t));
+  });
+});

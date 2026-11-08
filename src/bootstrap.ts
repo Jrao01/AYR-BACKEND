@@ -2,7 +2,8 @@ import { env } from './config/env.js';
 import { isDbUp, prisma } from './lib/prisma.js';
 import { logger } from './lib/logger.js';
 import { hashPassword } from './utils/password.js';
-import { seed } from './seed/seed.js';
+import { seed, syncLocationImages } from './seed/seed.js';
+import { syncImages } from './seed/sync-images.js';
 
 const DB_WAIT_RETRIES = 10;
 const DB_WAIT_DELAY_MS = 1_000;
@@ -88,6 +89,27 @@ export async function bootstrapDatabase(): Promise<void> {
   }
 
   await ensureAdmin();
+
+  // Las imágenes base se sincronizan en cada arranque, aunque las tablas de
+  // planes/ubicaciones/legales ya tengan datos. Esto repara volúmenes vacíos y
+  // completa fotos de sedes que se hayan quedado sin `imageId`.
+  try {
+    const images = await syncImages();
+    const linked = await syncLocationImages();
+    logger.info(
+      {
+        source: images.source,
+        created: images.created,
+        updated: images.updated,
+        copied: images.copied,
+        linked,
+      },
+      'Imágenes base sincronizadas',
+    );
+  } catch (error) {
+    // Un fallo de imágenes no debe impedir que la API arranque.
+    logger.warn({ err: error }, 'No se pudieron sincronizar las imágenes base');
+  }
 
   if (!(await isSeedNeeded())) {
     logger.info('Datos iniciales presentes; seed omitido');

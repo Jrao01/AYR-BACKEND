@@ -6,26 +6,56 @@ import { prisma } from '../lib/prisma.js';
 import { FOLDERS, mimeForExt, slugify } from '../modules/images/images.constants.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-/** Repo AyrInfoPage: este backend vive en AYR-BACKEND/ junto a web/. */
-const PUBLIC_DIR = path.resolve(ROOT, '..', 'web', 'public');
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg']);
 
-export type SyncResult = { created: number; updated: number; copied: number };
+/**
+ * Directorios candidatos con las imágenes base.
+ *
+ * - `PUBLIC_ASSETS_DIR`: ruta explícita por entorno.
+ * - `../web/public`: monorepo en desarrollo (backend junto a web/).
+ * - `seed-assets`: copia incluida en el repo del backend (imagen Docker), ya
+ *   que web/public queda fuera del build context en despliegues separados.
+ */
+export function resolvePublicAssetsDir(): string | null {
+  const candidates = [
+    env.PUBLIC_ASSETS_DIR,
+    path.resolve(ROOT, '..', 'web', 'public'),
+    path.resolve(ROOT, 'seed-assets'),
+    path.resolve(process.cwd(), 'seed-assets'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    const dir = path.resolve(candidate);
+    if (FOLDERS.some((folder) => fs.existsSync(path.join(dir, folder)))) {
+      return dir;
+    }
+  }
+  return null;
+}
+
+export type SyncResult = { created: number; updated: number; copied: number; source: string | null };
 
 /**
- * Copia web/public/{imgs,docs} → UPLOAD_DIR y crea/actualiza los ImageAsset.
- * Identidad estable: (folder, originalName). Idempotente.
+ * Copia las imágenes base ({imgs,docs}) → UPLOAD_DIR y crea/actualiza los
+ * ImageAsset. Identidad estable: (folder, originalName). Idempotente.
+ *
+ * Se ejecuta en cada arranque: repara volúmenes vacíos y completa las imágenes
+ * que falten sin tocar las fotos subidas desde el panel.
  */
 export async function syncImages(): Promise<SyncResult> {
-  const result: SyncResult = { created: 0, updated: 0, copied: 0 };
+  const result: SyncResult = { created: 0, updated: 0, copied: 0, source: null };
 
-  if (!fs.existsSync(PUBLIC_DIR)) {
-    console.warn(`[images] No existe ${PUBLIC_DIR}; se omite la sincronización.`);
+  const publicDir = resolvePublicAssetsDir();
+  if (!publicDir) {
+    console.warn(
+      '[images] No se encontró un directorio de imágenes base (PUBLIC_ASSETS_DIR, ../web/public ni seed-assets); se omite la sincronización.',
+    );
     return result;
   }
+  result.source = publicDir;
 
   for (const folder of FOLDERS) {
-    const dir = path.join(PUBLIC_DIR, folder);
+    const dir = path.join(publicDir, folder);
     if (!fs.existsSync(dir)) continue;
 
     const files = fs

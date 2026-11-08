@@ -124,7 +124,7 @@ function dataFromCreate(body: CreateLocationInput) {
     ...(body.address !== undefined ? { address: body.address } : {}),
     ...(body.reference !== undefined ? { reference: body.reference } : {}),
     ...(body.phone !== undefined ? { phone: body.phone } : {}),
-    ...(body.imageId !== undefined ? { imageId: body.imageId } : {}),
+    ...(body.imageId !== undefined ? { imageId: body.imageId, imageOptOut: false } : {}),
     ...(body.order !== undefined ? { order: body.order } : {}),
     ...(body.active !== undefined ? { active: body.active } : {}),
   };
@@ -141,7 +141,8 @@ function dataFromUpdate(body: UpdateLocationInput) {
     ...(body.phone !== undefined ? { phone: body.phone } : {}),
     ...(body.lat !== undefined ? { lat: body.lat } : {}),
     ...(body.lng !== undefined ? { lng: body.lng } : {}),
-    ...(body.imageId !== undefined ? { imageId: body.imageId } : {}),
+    // Asignar una imagen la reactiva; quitarla (null) desactiva el re-seed.
+    ...(body.imageId !== undefined ? { imageId: body.imageId, imageOptOut: body.imageId === null } : {}),
     ...(body.order !== undefined ? { order: body.order } : {}),
     ...(body.active !== undefined ? { active: body.active } : {}),
   };
@@ -227,6 +228,6 @@ locationsAdminRouter.delete('/:id', async (req, res) => {
   if (!existing) {
     throw new AppError(404, 'NOT_FOUND', 'Ubicación no encontrada');
   }
-  await prisma.mapLocation.delete({ where: { id: existing.id } });
+  await prisma.mapLocation.update({ where: { id: existing.id }, data: { active: false } });
   res.status(204).end();
 });

@@ -19,6 +19,9 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY prisma7.config.ts ./
 COPY prisma ./prisma
 COPY --from=build /app/dist ./dist
+# Imágenes base para sembrar el volumen de uploads en instalaciones nuevas o
+# cuando web/public no está disponible (repos de frontend y backend separados).
+COPY seed-assets ./seed-assets
 
 RUN mkdir -p /app/uploads /app/contact-uploads && chown -R node:node /app
 USER node

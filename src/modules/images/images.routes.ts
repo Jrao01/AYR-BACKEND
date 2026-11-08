@@ -305,7 +305,7 @@ imagesRouter.put('/locations/:idOrSlug', upload.single('file'), async (req, res)
   const asset = await upsertFixedImage(key, file, undefined, 'imgs');
   await prisma.mapLocation.update({
     where: { id: location.id },
-    data: { imageId: asset.id },
+    data: { imageId: asset.id, imageOptOut: false },
   });
 
   res.status(201).json({
@@ -323,7 +323,8 @@ imagesRouter.delete('/locations/:idOrSlug/image', async (req, res) => {
 
   await prisma.mapLocation.update({
     where: { id: location.id },
-    data: { imageId: null },
+    // La marca evita que el seed vuelva a asignar la imagen base al reiniciar.
+    data: { imageId: null, imageOptOut: true },
   });
 
   const key = `sede-${location.slug}`;

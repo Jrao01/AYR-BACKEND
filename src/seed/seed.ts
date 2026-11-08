@@ -55,6 +55,54 @@ async function seedPlans() {
   return plans.length;
 }
 
+/**
+ * Extensiones aceptadas para la foto base de una sede. El seed histórico usaba
+ * `.jpg`, pero así también funciona si la imagen se reemplaza por otro formato.
+ */
+const LOCATION_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+
+function locationImageNames(slug: string): string[] {
+  return LOCATION_IMAGE_EXTENSIONS.map((ext) => `${slug}${ext}`);
+}
+
+/**
+ * Vincula las sedes sin foto con una imagen ya registrada:
+ *  1. `sede-<slug>` → foto subida explícitamente desde el formulario de la sede.
+ *  2. `<slug>.<ext>` → imagen base del seed.
+ *
+ * Solo rellena `imageId` cuando es null: nunca pisa una foto elegida desde el
+ * panel. Idempotente; se ejecuta en cada arranque.
+ */
+export async function syncLocationImages(): Promise<number> {
+  let linked = 0;
+
+  for (const office of offices) {
+    const location = await prisma.mapLocation.findUnique({
+      where: { slug: office.id },
+      select: { id: true, imageId: true, imageOptOut: true },
+    });
+    if (!location || location.imageId || location.imageOptOut) continue;
+
+    const explicit = await prisma.imageAsset.findUnique({
+      where: { key: `sede-${office.id}` },
+      select: { id: true },
+    });
+    const image =
+      explicit ??
+      (await prisma.imageAsset.findFirst({
+        where: { folder: 'imgs', originalName: { in: locationImageNames(office.id) } },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      }));
+    if (!image) continue;
+
+    await prisma.mapLocation.update({ where: { id: location.id }, data: { imageId: image.id } });
+    linked += 1;
+  }
+
+  return linked;
+}
+
 async function seedLocations() {
   const rows = [
     ...offices.map((office, index) => ({
@@ -93,6 +141,11 @@ async function seedLocations() {
         })
       : null;
 
+    const existing = await prisma.mapLocation.findUnique({
+      where: { slug: row.slug },
+      select: { imageId: true, imageOptOut: true },
+    });
+
     const data = {
       type: row.type,
       municipality: row.municipality,
@@ -103,7 +156,9 @@ async function seedLocations() {
       lat: row.lat,
       lng: row.lng,
       order: row.order,
-      imageId: image?.id ?? null,
+      // Una foto ya asignada desde el panel manda sobre la imagen base; si el
+      // panel la quitó expresamente, el seed respeta esa decisión.
+      imageId: existing?.imageOptOut ? null : (existing?.imageId ?? image?.id ?? null),
       active: true,
     };
 
@@ -172,6 +227,7 @@ export async function seed() {
   const images = await syncImages();
   const planCount = await seedPlans();
   const locationCount = await seedLocations();
+  const linkedImages = await syncLocationImages();
   const sectionCount = await seedLegal();
   const adminCount = await seedAdmin();
 
@@ -185,7 +241,9 @@ export async function seed() {
   ]);
 
   console.log('[seed] listo');
-  console.log(`  imágenes: ${assetsDb} en BD (${images.created} nuevas, ${images.copied} copiadas a uploads)`);
+  console.log(
+    `  imágenes: ${assetsDb} en BD (${images.created} nuevas, ${images.copied} copiadas a uploads, ${linkedImages} sedes vinculadas)`,
+  );
   console.log(`  planes: ${planCount} sembrados → ${plansDb} en BD`);
   console.log(`  ubicaciones: ${locationCount} sembradas → ${locationsDb} en BD`);
   console.log(`  secciones legales: ${sectionCount} sembradas → ${sectionsDb} en BD (${documentsDb} documentos)`);
